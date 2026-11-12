@@ -1,0 +1,26 @@
+{
+  "marketContextSummary": "AAPL is trading above the prior-day close with steady volume support and no clear breakdown.",
+  "setups": [
+    {
+      "ticker": "AAPL",
+      "direction": "long",
+      "entryZone": { "low": 214.2, "high": 214.8 },
+      "stopPrice": 212.9,
+      "targets": [216.5, 218.2],
+      "rewardToRisk": 2.1,
+      "confidence": "medium",
+      "reasoning": "Price is holding above support and volume is stable.",
+      "dataPoints": [
+        "close=214.5",
+        "priorLow=212.4",
+        "atr=1.8"
+      ],
+      "invalidationCondition": "A close below 212.8 invalidates the setup."
+    }
+  ],
+  "risks": [
+    "Momentum can fade if volume drops sharply.",
+    "Macro headlines can trigger volatility."
+  ],
+  "disclaimer": "This analysis is for research only and is not financial advice."
+}
