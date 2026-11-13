@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "302af9ef-d909-4129-9c94-7e9817f4d364"
+      }
+    },
+    "android": {
+      "package": "com.cac122.marketcoach"
+    }
+  }
+}

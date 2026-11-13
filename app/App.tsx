@@ -411,6 +411,7 @@ function SettingsScreen(): React.ReactElement {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [token, setToken] = useState('');
   const [realizedLoss, setRealizedLoss] = useState('0');
+  const [serverUrlInput, setServerUrlInput] = useState('');
   const [serverStatus, setServerStatus] = useState<{ connected: boolean; message: string }>({
     connected: false,
     message: 'Server not connected',
@@ -420,6 +421,7 @@ function SettingsScreen(): React.ReactElement {
     void (async (): Promise<void> => {
       const loadedSettings = await readSettings();
       setSettings(loadedSettings);
+      setServerUrlInput(loadedSettings.serverUrl);
       setToken((await SecureStore.getItemAsync(TOKEN_KEY)) ?? '');
       setServerStatus(await checkServerHealth(loadedSettings.serverUrl));
     })();
@@ -428,6 +430,15 @@ function SettingsScreen(): React.ReactElement {
   const saveActiveSettings = async (nextSettings: Settings): Promise<void> => {
     const validated = validateSettings(nextSettings);
     setSettings(validated);
+    setServerUrlInput(validated.serverUrl);
+    await saveSettings(validated);
+    setServerStatus(await checkServerHealth(validated.serverUrl));
+  };
+
+  const persistServerUrl = async (): Promise<void> => {
+    const validated = validateSettings({ ...settings, serverUrl: serverUrlInput });
+    setSettings(validated);
+    setServerUrlInput(validated.serverUrl);
     await saveSettings(validated);
     setServerStatus(await checkServerHealth(validated.serverUrl));
   };
@@ -452,12 +463,14 @@ function SettingsScreen(): React.ReactElement {
         <TextInput value={String(settings.maxDailyLoss)} keyboardType="numeric" style={styles.input} onChangeText={(value) => { void saveActiveSettings({ ...settings, maxDailyLoss: Number(value) || 0 }); }} />
         <Text>Server URL (https only)</Text>
         <TextInput
-          value={settings.serverUrl}
+          value={serverUrlInput}
           autoCapitalize="none"
           autoCorrect={false}
           placeholder="https://your-render-url.onrender.com"
           style={styles.input}
-          onChangeText={(value) => { void saveActiveSettings({ ...settings, serverUrl: value }); }}
+          onChangeText={setServerUrlInput}
+          onBlur={() => { void persistServerUrl(); }}
+          onSubmitEditing={() => { void persistServerUrl(); }}
         />
         <Text>Refresh interval (seconds)</Text>
         <TextInput value={String(settings.refreshInterval)} keyboardType="numeric" style={styles.input} onChangeText={(value) => { void saveActiveSettings({ ...settings, refreshInterval: Number(value) || 0 }); }} />
