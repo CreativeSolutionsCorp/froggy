@@ -25,6 +25,7 @@ export type PolygonClientErrorCode =
   | 'rate_limit'
   | 'empty_results'
   | 'unavailable'
+  | 'authentication'
   | 'plan_restricted'
   | 'invalid_response';
 
@@ -112,7 +113,11 @@ export function createPolygonClient(options: PolygonClientOptions) {
         throw new PolygonClientError('Polygon rate limit reached.', 'rate_limit', response.status, retryAfterMs);
       }
 
-      if (response.status === 401 || response.status === 403) {
+      if (response.status === 401) {
+        throw new PolygonClientError('Polygon rejected the API key.', 'authentication', response.status);
+      }
+
+      if (response.status === 403) {
         throw new PolygonClientError('Polygon request was rejected. Check the API key and plan permissions.', 'plan_restricted', response.status);
       }
 

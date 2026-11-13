@@ -15,11 +15,18 @@ export type AnthropicClientLike = {
   };
 };
 
+export class AnthropicOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnthropicOutputError';
+  }
+}
+
 export function parseAnthropicResponseText(raw: unknown): unknown {
   const candidate = typeof raw === 'string' ? raw.trim() : '';
 
   if (!candidate) {
-    throw new Error('Anthropic returned empty text output.');
+    throw new AnthropicOutputError('Anthropic returned empty text output.');
   }
 
   try {
@@ -29,13 +36,13 @@ export function parseAnthropicResponseText(raw: unknown): unknown {
     const jsonLike = fenced ? fenced[1] : candidate.match(/\{[\s\S]*\}/)?.[0] ?? candidate;
 
     if (!jsonLike) {
-      throw new Error('Anthropic returned non-JSON output.');
+      throw new AnthropicOutputError('Anthropic returned non-JSON output.');
     }
 
     try {
       return JSON.parse(jsonLike);
     } catch {
-      throw new Error('Anthropic output could not be parsed as JSON.');
+      throw new AnthropicOutputError('Anthropic output could not be parsed as JSON.');
     }
   }
 }
@@ -53,7 +60,7 @@ function extractTextContent(content: unknown): string {
     }
   }
 
-  throw new Error('Anthropic response did not contain text content.');
+  throw new AnthropicOutputError('Anthropic response did not contain text content.');
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -82,6 +89,10 @@ async function requestModelText(
     } catch (error) {
       lastError = error;
 
+      if (error instanceof AnthropicOutputError) {
+        break;
+      }
+
       if (!isRetryableError(error) || attempt >= retries) {
         break;
       }
@@ -100,7 +111,7 @@ export function createAnthropicClient(
   generateCoach: (input: { prompt: string }) => Promise<unknown>;
 } {
   const normalizedKey = apiKey.trim();
-  const model = options.model ?? 'claude-3-5-sonnet-latest';
+  const model = options.model ?? 'claude-sonnet-5-5';
   const retries = Number.isFinite(options.retries) ? Math.max(0, Number(options.retries)) : 2;
   const maxTokens = Number.isFinite(options.maxTokens) ? Number(options.maxTokens) : 1024;
 

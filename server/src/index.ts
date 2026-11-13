@@ -1,6 +1,7 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { briefResponseSchema, buildBriefingPrompt, buildCoachPrompt, coachResponseSchema, validateModelOutput } from './ai';
-import { createAnthropicClient } from './anthropic-client';
+import { AnthropicOutputError, createAnthropicClient } from './anthropic-client';
+import { createPolygonClient, PolygonClientError, type PolygonBar } from './polygon-client';
 
 export type BriefingAsk = {
   label: string;
@@ -38,6 +39,11 @@ export type ServerEnvironment = {
   anthropicApiKey: string;
   rateLimitWindowMs: number;
   maxRequests: number;
+};
+
+export type ServerDependencies = {
+  polygonClient?: ReturnType<typeof createPolygonClient>;
+  anthropicClient?: ReturnType<typeof createAnthropicClient>;
 };
 
 const VALID_TIMEFRAMES = new Set(['1D', '1W', '1M', '3M', '1Y', 'MAX']);
@@ -242,25 +248,43 @@ export function buildRiskSummary(inputs: RiskInputs): {
   };
 }
 
-function buildSummaryFromBriefing(payload: BriefingRequest): { symbol: string; timeframe: string; style: string; summary: string } {
-  const trendCue = payload.asks.length > 0 ? payload.asks[0]?.value ?? 'Market structure is stable.' : 'Market structure is stable.';
-  const summary = payload.notes
-    ? `${payload.symbol} is in view for ${payload.timeframe}. ${trendCue}. ${payload.notes}`
-    : `${payload.symbol} is in view for ${payload.timeframe}. ${trendCue}.`;
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object' || !('status' in error)) {
+    return undefined;
+  }
 
-  return {
-    symbol: payload.symbol,
-    timeframe: payload.timeframe,
-    style: payload.style ?? 'balanced',
-    summary: summary.slice(0, 800),
-  };
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' ? status : undefined;
 }
 
-export function createServer(env: Partial<ServerEnvironment> = {}): Express {
+function isValidPolygonBar(bar: PolygonBar): boolean {
+  return [bar.o, bar.h, bar.l, bar.c].every((value) => Number.isFinite(value) && value > 0)
+    && bar.h >= Math.max(bar.o, bar.c, bar.l)
+    && bar.l <= Math.min(bar.o, bar.c, bar.h)
+    && Number.isFinite(bar.v)
+    && bar.v > 0
+    && typeof bar.t === 'number'
+    && Number.isFinite(bar.t)
+    && Number.isFinite(new Date(bar.t).getTime());
+}
+
+function sendBriefingError(res: Response, status: number, code: string, error: string): void {
+  res.status(status).json({ ok: false, code, error });
+}
+
+export function logStartupEnvironment(env: Partial<ServerEnvironment> = {}): void {
+  console.info(`POLYGON_API_KEY: ${(env.polygonApiKey ?? process.env.POLYGON_API_KEY ?? '').trim() ? 'yes' : 'no'}`);
+  console.info(`ANTHROPIC_API_KEY: ${(env.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '').trim() ? 'yes' : 'no'}`);
+  console.info(`SHARED_APP_TOKEN: ${(env.sharedAppToken ?? process.env.SHARED_APP_TOKEN ?? '').trim() ? 'yes' : 'no'}`);
+}
+
+export function createServer(env: Partial<ServerEnvironment> = {}, dependencies: ServerDependencies = {}): Express {
   const app = express();
   const token = (env.sharedAppToken ?? process.env.SHARED_APP_TOKEN ?? '').trim();
+  const polygonApiKey = (env.polygonApiKey ?? process.env.POLYGON_API_KEY ?? '').trim();
   const anthropicApiKey = (env.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '').trim();
-  const anthropicClient = anthropicApiKey ? createAnthropicClient(anthropicApiKey) : null;
+  const polygonClient = dependencies.polygonClient ?? (polygonApiKey ? createPolygonClient({ apiKey: polygonApiKey }) : null);
+  const anthropicClient = dependencies.anthropicClient ?? (anthropicApiKey ? createAnthropicClient(anthropicApiKey) : null);
   const rateLimiter = createRateLimiter({
     maxRequests: env.maxRequests ?? Number(process.env.MAX_REQUESTS ?? 60),
     windowMs: env.rateLimitWindowMs ?? Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000),
@@ -305,54 +329,125 @@ export function createServer(env: Partial<ServerEnvironment> = {}): Express {
   });
 
   app.post('/api/briefing', async (req: Request, res: Response) => {
+    let payload: BriefingRequest;
     try {
-      const payload = validateBriefingRequest(req.body);
-      const prompt = buildBriefingPrompt({
-        symbol: payload.symbol,
-        timeframe: payload.timeframe,
-        data: payload.asks.map((ask) => ({ label: ask.label, value: ask.value })),
-        ...(payload.notes ? { notes: payload.notes } : {}),
-      });
-
-      const summary = buildSummaryFromBriefing(payload);
-      const fallbackRisk = buildRiskSummary({
-        volatility: payload.asks.length > 0 ? 0.62 : 0.28,
-        drawdown: payload.notes ? 0.22 : 0.12,
-        liquidity: 0.81,
-        conviction: payload.style === 'concise' ? 0.73 : 0.68,
-      });
-
-      if (anthropicClient) {
-        try {
-          const raw = await anthropicClient.generateBriefing({ prompt });
-          const analysis = validateModelOutput(raw, briefResponseSchema);
-
-          return res.json({
-            ok: true,
-            summary: {
-              symbol: payload.symbol,
-              timeframe: payload.timeframe,
-              style: payload.style,
-              summary: analysis.marketContextSummary,
-            },
-            risk: {
-              score: Math.min(100, Math.max(0, Math.round((analysis.setups.length + analysis.risks.length) * 18))),
-              band: analysis.risks.length > 2 ? 'high' : analysis.setups.length > 0 ? 'moderate' : 'low',
-              notes: analysis.risks,
-            },
-            model: analysis,
-            source: 'anthropic',
-          });
-        } catch {
-          return res.json({ ok: true, summary, risk: fallbackRisk, source: 'local' });
-        }
-      }
-
-      res.json({ ok: true, summary, risk: fallbackRisk });
+      payload = validateBriefingRequest(req.body);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid briefing request';
-      res.status(400).json({ error: message });
+      sendBriefingError(res, 400, 'INVALID_REQUEST', message);
+      return;
     }
+
+    if (!polygonApiKey) {
+      sendBriefingError(res, 503, 'MISSING_KEY', 'Missing required environment variable POLYGON_API_KEY.');
+      return;
+    }
+
+    if (!anthropicApiKey) {
+      sendBriefingError(res, 503, 'MISSING_KEY', 'Missing required environment variable ANTHROPIC_API_KEY.');
+      return;
+    }
+
+    if (!polygonClient || !anthropicClient) {
+      sendBriefingError(res, 503, 'MISSING_KEY', 'A required briefing provider is not configured.');
+      return;
+    }
+
+    let bar: PolygonBar;
+    try {
+      bar = await polygonClient.getPreviousDayBar(payload.symbol);
+      if (!isValidPolygonBar(bar)) {
+        sendBriefingError(res, 502, 'POLYGON_ERROR', 'Polygon returned an incomplete previous-day aggregate.');
+        return;
+      }
+    } catch (error) {
+      const status = getErrorStatus(error);
+      const polygonCode = error instanceof PolygonClientError ? error.code : undefined;
+      if (status === 401 || polygonCode === 'authentication') {
+        sendBriefingError(res, 502, 'POLYGON_AUTH', 'Polygon rejected the API key. Check POLYGON_API_KEY.');
+      } else if (status === 403 || polygonCode === 'plan_restricted') {
+        sendBriefingError(res, 502, 'POLYGON_PLAN', 'Polygon denied access to the previous-day aggregate endpoint for this key or plan.');
+      } else {
+        sendBriefingError(res, 502, 'POLYGON_ERROR', 'Polygon failed to return the previous-day aggregate.');
+      }
+      return;
+    }
+
+    const sourceDataPoints = [
+      `Polygon ${payload.symbol} previous-day timestamp=${new Date(bar.t as number).toISOString()}`,
+      `open=${bar.o}`,
+      `high=${bar.h}`,
+      `low=${bar.l}`,
+      `close=${bar.c}`,
+      `volume=${bar.v}`,
+    ];
+    const prompt = buildBriefingPrompt({
+      symbol: payload.symbol,
+      timeframe: payload.timeframe,
+      data: [
+        ...sourceDataPoints.map((value) => {
+          const separator = value.indexOf('=');
+          return { label: value.slice(0, separator), value: value.slice(separator + 1) };
+        }),
+        ...payload.asks.map((ask) => ({ label: ask.label, value: ask.value })),
+      ],
+      ...(payload.notes ? { notes: payload.notes } : {}),
+    });
+
+    let raw: unknown;
+    try {
+      raw = await anthropicClient.generateBriefing({ prompt });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      if (error instanceof AnthropicOutputError) {
+        sendBriefingError(res, 502, 'MODEL_OUTPUT_INVALID', `Claude returned an invalid briefing: ${error.message}`);
+      } else if (status === 401 || status === 403) {
+        sendBriefingError(res, 502, 'ANTHROPIC_AUTH', 'Anthropic rejected the API key. Check ANTHROPIC_API_KEY.');
+      } else {
+        sendBriefingError(res, 502, 'ANTHROPIC_ERROR', `Anthropic briefing request failed${status ? ` (HTTP ${status})` : ''}.`);
+      }
+      return;
+    }
+
+    const parsed = briefResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      sendBriefingError(res, 502, 'MODEL_OUTPUT_INVALID', `Claude returned an invalid briefing: ${parsed.error.issues.map((issue) => issue.message).join('; ')}`);
+      return;
+    }
+
+    const analysis = parsed.data;
+    if (analysis.setups.some((setup) => sanitizeSymbol(setup.ticker) !== payload.symbol)) {
+      sendBriefingError(res, 502, 'MODEL_OUTPUT_INVALID', 'Claude returned an invalid briefing: every setup ticker must match the requested symbol.');
+      return;
+    }
+
+    const model = {
+      ...analysis,
+      setups: analysis.setups.map((setup) => ({ ...setup, dataPoints: sourceDataPoints })),
+    };
+
+    res.json({
+      ok: true,
+      summary: {
+        symbol: payload.symbol,
+        timeframe: payload.timeframe,
+        style: payload.style,
+        summary: analysis.marketContextSummary,
+      },
+      risk: { notes: analysis.risks },
+      marketData: {
+        provider: 'Polygon',
+        ticker: payload.symbol,
+        timestamp: bar.t,
+        open: bar.o,
+        high: bar.h,
+        low: bar.l,
+        close: bar.c,
+        volume: bar.v,
+      },
+      model,
+      source: 'polygon+anthropic',
+    });
   });
 
   app.post('/api/coaching', async (req: Request, res: Response) => {
@@ -470,6 +565,8 @@ export function createServer(env: Partial<ServerEnvironment> = {}): Express {
 export function startServer(env: Partial<ServerEnvironment> = {}): Express {
   const port = Number(env.port ?? process.env.PORT ?? 3001);
   const app = createServer(env);
+
+  logStartupEnvironment(env);
 
   app.listen(port, () => {
     console.info(`Market Coach proxy listening on port ${port}`);

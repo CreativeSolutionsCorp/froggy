@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { isValidBriefingRecord, isValidBriefingResponse, type BriefingRecord } from './briefing';
 import { checkServerHealth, normalizeServerUrl } from './server-config';
 
 type Settings = {
@@ -31,28 +32,6 @@ type Quote = {
   bid: number;
   ask: number;
   last: number;
-  timestamp: string;
-};
-
-type BriefingSetup = {
-  ticker: string;
-  direction: 'long' | 'short';
-  entryZone: { low: number; high: number };
-  stopPrice: number;
-  targets: number[];
-  rewardToRisk: number;
-  confidence: 'low' | 'medium' | 'high';
-  reasoning: string;
-  dataPoints: string[];
-  invalidationCondition: string;
-};
-
-type BriefingRecord = {
-  id: string;
-  symbol: string;
-  summary: string;
-  disclaimer: string;
-  setups: BriefingSetup[];
   timestamp: string;
 };
 
@@ -124,7 +103,12 @@ async function readHistory(): Promise<BriefingRecord[]> {
       return [];
     }
 
-    return JSON.parse(raw) as BriefingRecord[];
+    const parsed: unknown = JSON.parse(raw);
+    const validRecords = Array.isArray(parsed) ? parsed.filter(isValidBriefingRecord).slice(0, 10) : [];
+    if (!Array.isArray(parsed) || validRecords.length !== parsed.length) {
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(validRecords));
+    }
+    return validRecords;
   } catch {
     return [];
   }
@@ -173,13 +157,12 @@ function BriefingScreen(): React.ReactElement {
     setLoading(true);
     setError('');
 
-    const baseUrl = normalizeServerUrl(settings.serverUrl);
-    if (!baseUrl) {
-      setError('Set a valid https server URL in Settings before requesting a briefing.');
-      return;
-    }
-
     try {
+      const baseUrl = normalizeServerUrl(settings.serverUrl);
+      if (!baseUrl) {
+        throw new Error('Set a valid https server URL in Settings before requesting a briefing.');
+      }
+
       const url = `${baseUrl}/api/briefing`;
       const response = await fetch(url, {
         method: 'POST',
@@ -196,41 +179,30 @@ function BriefingScreen(): React.ReactElement {
         }),
       });
 
+      const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? 'The briefing request failed.');
+        const serverError = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+          ? body.error
+          : `The briefing request failed (${response.status}).`;
+        throw new Error(serverError);
       }
 
-      const data = (await response.json()) as {
-        summary?: { symbol: string; timeframe: string; summary: string; style: string };
-        risk?: { score: number; band: string };
-      };
+      if (!isValidBriefingResponse(body)) {
+        throw new Error('The server returned an invalid or empty briefing. Nothing was saved.');
+      }
 
       const nextRecord: BriefingRecord = {
         id: String(Date.now()),
-        symbol: data.summary?.symbol ?? watchlist[0],
-        summary: data.summary?.summary ?? 'No summary available.',
-        disclaimer: 'This analysis is for research only and is not financial advice.',
-        setups: [
-          {
-            ticker: data.summary?.symbol ?? watchlist[0],
-            direction: 'long',
-            entryZone: { low: 0, high: 0 },
-            stopPrice: 0,
-            targets: [0],
-            rewardToRisk: 0,
-            confidence: 'medium',
-            reasoning: data.summary?.summary ?? 'No structured setup generated.',
-            dataPoints: [`timeframe=${data.summary?.timeframe ?? '1D'}`, `riskBand=${data.risk?.band ?? 'unknown'}`],
-            invalidationCondition: 'A close below the stop invalidates the setup.',
-          },
-        ],
+        symbol: body.summary.symbol,
+        summary: body.summary.summary,
+        disclaimer: body.model.disclaimer,
+        setups: body.model.setups,
         timestamp: new Date().toISOString(),
       };
 
       const updatedHistory = [nextRecord, ...history].slice(0, 10);
-      setHistory(updatedHistory);
       await saveHistory(updatedHistory);
+      setHistory(updatedHistory);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to load a briefing.');
     } finally {

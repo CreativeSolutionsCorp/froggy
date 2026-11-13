@@ -32,4 +32,17 @@ describe('AI schema validation', () => {
   it('rejects invalid data and surfaces validation errors', () => {
     expect(() => validateModelOutput({ bad: 'value' }, briefResponseSchema)).toThrow();
   });
+
+  it('rejects missing and zero-valued setup levels', () => {
+    const fixturePath = join(__dirname, 'fixtures', 'briefing-response.json');
+    const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
+    const setup = fixture.setups[0];
+
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, entryZone: undefined }] })).toThrow();
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, stopPrice: undefined }] })).toThrow();
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, targets: undefined }] })).toThrow();
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, entryZone: { low: 0, high: setup.entryZone.high } }] })).toThrow();
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, stopPrice: 0 }] })).toThrow();
+    expect(() => briefResponseSchema.parse({ ...fixture, setups: [{ ...setup, targets: [0] }] })).toThrow();
+  });
 });

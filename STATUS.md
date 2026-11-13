@@ -35,23 +35,28 @@ Verification results:
 - [x] Added position sizing logic and stop-loss proposal helpers with validation for invalid trade inputs.
 - [x] Added hand-calculated unit tests for the formulas and edge cases.
 
-## Phase 4+: Status
+## Phase 4: Data-backed briefings
 
-- [ ] NOT VERIFIED: AI prompt execution against Anthropic with validated live responses and retry behavior has not been proven with a real provider call.
-- [ ] NOT VERIFIED: Android device build/install and the mobile camera/live-flow run on-device have not been executed in this session.
-- [ ] NOT VERIFIED: final APK build instructions, device validation, and acceptance-report execution remain pending actual device testing.
+- [x] `/api/briefing` now requires Polygon and Anthropic credentials and requests a previous-day Polygon aggregate before calling Claude.
+- [x] Missing credentials, Polygon auth/plan errors, Anthropic auth failures, and malformed Claude output return explicit HTTP error codes.
+- [x] Briefing schema rejects missing/zero setup levels and requires at least one complete setup.
+- [x] The app shows server error text, validates successful responses before persistence, and filters invalid saved history.
+- [x] Startup logs only yes/no credential presence; local server startup loads `server/.env` without printing values.
+- [x] EAS Android preview build completed: `c17a49b6-1368-4da2-a231-a32837b6205a`.
+- [ ] NOT VERIFIED: a real Polygon-plus-Claude `/api/briefing` call has not been executed; rotate the local provider credentials before live verification.
+- [ ] NOT VERIFIED: the updated APK has not been installed; camera/live workflow has not been run on-device.
 
 Verification results:
 
-- Commands run successfully: `source "$HOME/.nvm/nvm.sh" && cd /home/jsb32479/new && npm run lint && npm run typecheck && npm run test && ./scripts/e2e-smoke.sh`
-- Result: all workspace lint checks passed, both package typechecks passed, all Jest suites passed, and the local health smoke test returned success.
-- App tests: 1 suite passed, 1 test passed.
-- Server tests: 6 suites passed, 26 tests passed.
-- The verified work is the local repo check, not live provider or device execution.
+- Commands run successfully: `source "$HOME/.nvm/nvm.sh" && cd /home/jsb32479/new && npm run lint && npm run typecheck && npm test`
+- Result: both workspaces passed lint and typecheck; app tests passed (1 suite, 3 tests); server tests passed (6 suites, 34 tests).
+- Provider-call contract tests use injected fake clients; they verify request construction, successful response shape, error codes, and rejection of missing/zero setup levels.
+- Zero defaults remain in the legacy quote display/endpoint and standalone empty-input math helpers; they are not used by `/api/briefing`.
+- No live provider output or on-device behavior is claimed as verified.
 
 ## Environment notes
 
-- Live provider keys remain server-side in `server/.env` and are never bundled into the Expo app.
-- No Android SDK/device build has been run in this session; the repo is functionally verified at the lint/typecheck/test level, not device-installed.
-- Real live provider calls have not been executed in this environment, so the Polygon and Anthropic integrations remain NOT VERIFIED.
+- Provider keys must remain server-side and must never be bundled into the Expo app.
+- The new Android APK still requires a device install/run to verify the mobile workflow.
+- Live Polygon and Anthropic calls remain NOT VERIFIED until credentials are rotated and a real request succeeds.
 - This repository intentionally has no brokerage integration and contains no generated market or model data.
