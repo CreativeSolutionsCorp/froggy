@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-11-12
+Updated: 2026-11-15
 
 ## Phase 1: Project setup
 
@@ -24,9 +24,9 @@ Verification results:
 
 - [x] Added the server request/validation layer, auth checks, rate limiting, health checks, and basic briefing/coaching endpoints.
 - [x] Added AI response schema validation and prompt builders.
-- [x] Added a live Anthropic client wrapper with JSON extraction, validation, and retry handling for transient provider failures.
+- [x] Added a live Google Gen AI client wrapper with JSON extraction and retry handling for transient provider failures.
 - [x] Added market-math and position-sizing modules with unit tests.
-- [ ] NOT VERIFIED: the real Anthropic provider request path remains unverified because no live API call was executed from this environment.
+- [ ] NOT VERIFIED: the real Gemini provider request path remains unverified because no live API call was executed from this environment.
 
 ## Phase 3: Data layer and risk math
 
@@ -37,26 +37,32 @@ Verification results:
 
 ## Phase 4: Data-backed briefings
 
-- [x] `/api/briefing` now requires Polygon and Anthropic credentials and requests a previous-day Polygon aggregate before calling Claude.
-- [x] Missing credentials, Polygon auth/plan errors, Anthropic auth failures, and malformed Claude output return explicit HTTP error codes.
+- [x] `/api/briefing` requires Polygon and Gemini credentials and requests a previous-day Polygon aggregate before calling Gemini.
+- [x] Missing credentials, Polygon auth/plan errors, Gemini auth failures, and malformed Gemini output return explicit HTTP error codes.
 - [x] Briefing schema rejects missing/zero setup levels and requires at least one complete setup.
 - [x] The app shows server error text, validates successful responses before persistence, and filters invalid saved history.
 - [x] Startup logs only yes/no credential presence; local server startup loads `server/.env` without printing values.
+- [x] Render health checks use `/health`; health routes bypass app-token auth so platform probes succeed.
+- [x] Gemini HTTP error details are returned with the API key redacted; `GEMINI_MODEL` defaults to `gemini-3.8-flash` and can override it.
+- [x] The personal app build defaults to the configured Render URL and shared token; Settings no longer asks the user to enter either value.
 - [x] EAS Android preview build completed: `c17a49b6-1368-4da2-a231-a32837b6205a`.
-- [ ] NOT VERIFIED: a real Polygon-plus-Claude `/api/briefing` call has not been executed; rotate the local provider credentials before live verification.
+- [ ] NOT VERIFIED: a real Polygon-plus-Gemini `/api/briefing` call has not been executed; the Gemini client is covered by injected-client tests only.
+- [x] The prior live Gemini request returned HTTP 400 because the account credit balance was too low; no live Gemini request was made for this migration.
 - [ ] NOT VERIFIED: the updated APK has not been installed; camera/live workflow has not been run on-device.
 
 Verification results:
 
-- Commands run successfully: `source "$HOME/.nvm/nvm.sh" && cd /home/jsb32479/new && npm run lint && npm run typecheck && npm test`
-- Result: both workspaces passed lint and typecheck; app tests passed (1 suite, 3 tests); server tests passed (6 suites, 34 tests).
+- Commands run successfully: `npm run lint && npm run typecheck && npm test`
+- Result: both workspaces passed lint and typecheck; app tests passed (1 suite, 4 tests); server tests passed (6 suites, 38 tests).
 - Provider-call contract tests use injected fake clients; they verify request construction, successful response shape, error codes, and rejection of missing/zero setup levels.
 - Zero defaults remain in the legacy quote display/endpoint and standalone empty-input math helpers; they are not used by `/api/briefing`.
-- No live provider output or on-device behavior is claimed as verified.
+- Render's configured Free service can spin down after 15 minutes without inbound traffic; a health check detects/restarts unhealthy instances but is not an always-on plan. A paid service compute plan is required for continuous availability.
+- Gemini provider output and on-device behavior are not verified. The shared app token is embedded in the personal app build and is recoverable; it is not suitable for internet-facing authentication.
 
 ## Environment notes
 
 - Provider keys must remain server-side and must never be bundled into the Expo app.
+- The app's default shared token is client-distributed; use proper user authentication for an internet-facing deployment.
 - The new Android APK still requires a device install/run to verify the mobile workflow.
-- Live Polygon and Anthropic calls remain NOT VERIFIED until credentials are rotated and a real request succeeds.
+- Live Polygon and Gemini calls remain NOT VERIFIED until credentials are rotated and a real request succeeds.
 - This repository intentionally has no brokerage integration and contains no generated market or model data.
